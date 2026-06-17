@@ -1,49 +1,62 @@
-FROM bitnami/spark:3.5
+# ── Stage 1: shared base — Spark 4.0.3 + all extra JARs ─────────────────────
+# Both the cluster nodes and the notebook container build from this stage,
+# so every executor node already has the same JARs as the driver.
+FROM apache/spark:4.0.3-python3 AS spark-base
 
-# Build args — keep in sync with the bitnami/spark:3.5 version
-ARG SPARK_VERSION=3.5.1
-ARG SCALA_VERSION=2.12
+ARG SPARK_VERSION=4.0.3
+ARG SCALA_VERSION=2.13
 
 USER root
 
-# ─── Extra JARs (Kafka, PostgreSQL, Delta Lake) ───────────────────────────────
-# Placed in SPARK_HOME/jars so they are on the classpath automatically.
-RUN JAR_DIR=/opt/bitnami/spark/jars \
+# Wire PySpark (bundled at /opt/spark/python) without a conflicting pip install
+ENV PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.9-src.zip
+ENV PYSPARK_PYTHON=python3
+
+RUN JAR_DIR=/opt/spark/jars \
  && BASE=https://repo1.maven.org/maven2 \
- # Kafka integration
+ # Kafka integration (Scala 2.13 artifacts for Spark 4.x)
  && curl -fsSL "${BASE}/org/apache/spark/spark-sql-kafka-0-10_${SCALA_VERSION}/${SPARK_VERSION}/spark-sql-kafka-0-10_${SCALA_VERSION}-${SPARK_VERSION}.jar" \
          -o "${JAR_DIR}/spark-sql-kafka-0-10_${SCALA_VERSION}-${SPARK_VERSION}.jar" \
  && curl -fsSL "${BASE}/org/apache/spark/spark-token-provider-kafka-0-10_${SCALA_VERSION}/${SPARK_VERSION}/spark-token-provider-kafka-0-10_${SCALA_VERSION}-${SPARK_VERSION}.jar" \
          -o "${JAR_DIR}/spark-token-provider-kafka-0-10_${SCALA_VERSION}-${SPARK_VERSION}.jar" \
- && curl -fsSL "${BASE}/org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar" \
-         -o "${JAR_DIR}/kafka-clients-3.4.1.jar" \
- && curl -fsSL "${BASE}/org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar" \
-         -o "${JAR_DIR}/commons-pool2-2.11.1.jar" \
+ && curl -fsSL "${BASE}/org/apache/kafka/kafka-clients/3.9.1/kafka-clients-3.9.1.jar" \
+         -o "${JAR_DIR}/kafka-clients-3.9.1.jar" \
+ && curl -fsSL "${BASE}/org/apache/commons/commons-pool2/2.12.0/commons-pool2-2.12.0.jar" \
+         -o "${JAR_DIR}/commons-pool2-2.12.0.jar" \
  # PostgreSQL JDBC
  && curl -fsSL "${BASE}/org/postgresql/postgresql/42.7.3/postgresql-42.7.3.jar" \
          -o "${JAR_DIR}/postgresql-42.7.3.jar" \
- # Delta Lake (compatible with Spark 3.5.x)
- && curl -fsSL "${BASE}/io/delta/delta-spark_${SCALA_VERSION}/3.2.0/delta-spark_${SCALA_VERSION}-3.2.0.jar" \
-         -o "${JAR_DIR}/delta-spark_${SCALA_VERSION}-3.2.0.jar" \
- && curl -fsSL "${BASE}/io/delta/delta-storage/3.2.0/delta-storage-3.2.0.jar" \
-         -o "${JAR_DIR}/delta-storage-3.2.0.jar"
+ # Delta Lake 4.x (Spark 4.x / Scala 2.13)
+ && curl -fsSL "${BASE}/io/delta/delta-spark_${SCALA_VERSION}/4.0.0/delta-spark_${SCALA_VERSION}-4.0.0.jar" \
+         -o "${JAR_DIR}/delta-spark_${SCALA_VERSION}-4.0.0.jar" \
+ && curl -fsSL "${BASE}/io/delta/delta-storage/4.0.0/delta-storage-4.0.0.jar" \
+         -o "${JAR_DIR}/delta-storage-4.0.0.jar"
 
-# ─── Python packages ──────────────────────────────────────────────────────────
+# Conf dir for the spark-defaults.conf bind-mount
+RUN mkdir -p /opt/spark/conf
+
+
+# ── Stage 2: cluster node (spark-master + spark-worker) ──────────────────────
+FROM spark-base AS cluster
+USER 185
+
+
+# ── Stage 3: notebook (spark-base + JupyterLab + Python packages) ─────────────
+FROM spark-base AS notebook
+
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip3 install --upgrade pip --quiet \
+ && pip3 install --no-cache-dir -r /tmp/requirements.txt
 
-# ─── Jupyter home ─────────────────────────────────────────────────────────────
 RUN mkdir -p /home/jupyter/notebooks /home/jupyter/data \
- && chown -R 1001:1001 /home/jupyter
+ && useradd -m -u 1000 -d /home/jupyter -s /bin/bash jupyter \
+ && chown -R 1000:1000 /home/jupyter
 
-USER 1001
+USER 1000
 WORKDIR /home/jupyter
 
 EXPOSE 8888 4040
 
-CMD jupyter lab \
-    --ip=0.0.0.0 \
-    --port=8888 \
-    --no-browser \
-    --notebook-dir=/home/jupyter/notebooks \
-    "--ServerApp.token=${JUPYTER_TOKEN:-spark123}"
+# Override the K8s-oriented entrypoint from the base image
+ENTRYPOINT ["/bin/bash", "-c"]
+CMD ["jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --notebook-dir=/home/jupyter/notebooks --ServerApp.token=${JUPYTER_TOKEN:-spark123}"]

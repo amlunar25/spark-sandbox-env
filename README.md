@@ -285,3 +285,6 @@ The JARs are downloaded during `docker build`. Run `docker compose up --build no
 
 **`CLUSTER_ID` mismatch error from Kafka**  
 The `kafka-data` volume has stale metadata. Run `docker compose down -v` to wipe it, then restart.
+
+**`bitnami/spark:3.5: not found`**  
+Bitnami dropped the `major.minor` tags. The compose file now uses `apache/spark:3.5.0` (official Apache image) — pull it with `docker pull apache/spark:3.5.0` if needed.
