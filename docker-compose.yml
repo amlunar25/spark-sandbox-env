@@ -1,0 +1,148 @@
+services:
+
+  # ─── Spark Cluster ────────────────────────────────────────────────────────────
+
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: spark-master
+    hostname: spark-master
+    networks:
+      - sandbox
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    ports:
+      - "8080:8080"   # Spark Master Web UI
+      - "7077:7077"   # Spark submit endpoint
+    volumes:
+      - ./data:/data
+      - ./spark-conf/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: spark-worker
+    hostname: spark-worker
+    networks:
+      - sandbox
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    depends_on:
+      - spark-master
+    volumes:
+      - ./data:/data
+      - ./spark-conf/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+
+  # ─── Jupyter Notebook (PySpark + DuckDB) ─────────────────────────────────────
+
+  notebook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: notebook
+    hostname: notebook
+    networks:
+      - sandbox
+    ports:
+      - "8888:8888"   # JupyterLab UI
+      - "4040:4040"   # Spark App UI (active during a job)
+    environment:
+      SPARK_MASTER: spark://spark-master:7077
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: sandbox
+      POSTGRES_USER: spark
+      POSTGRES_PASSWORD: spark123
+      JUPYTER_TOKEN: spark123
+    volumes:
+      - ./notebooks:/home/jupyter/notebooks
+      - ./data:/home/jupyter/data
+      - ./spark-conf/spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+    depends_on:
+      - spark-master
+      - kafka
+      - postgres
+
+  # ─── Kafka (KRaft — no Zookeeper) ────────────────────────────────────────────
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    hostname: kafka
+    networks:
+      - sandbox
+    ports:
+      - "9092:9092"   # Host access for local producers/consumers
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://0.0.0.0:9092,CONTROLLER://kafka:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    hostname: kafka-ui
+    networks:
+      - sandbox
+    ports:
+      - "8090:8080"   # Kafka UI
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      - kafka
+
+  # ─── PostgreSQL ───────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    hostname: postgres
+    networks:
+      - sandbox
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: spark
+      POSTGRES_PASSWORD: spark123
+      POSTGRES_DB: sandbox
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spark -d sandbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  sandbox:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  postgres-data:
