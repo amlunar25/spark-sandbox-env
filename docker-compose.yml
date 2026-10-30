@@ -21,7 +21,7 @@ services:
       - --webui-port
       - "8080"
     ports:
-      - "8080:8080"   # Spark Master Web UI
+      - "18081:8080"  # Spark Master Web UI (host 18081; 8080 is often taken)
       - "7077:7077"   # Spark submit endpoint
     volumes:
       - ./data:/home/jupyter/data
@@ -40,7 +40,7 @@ services:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
       - --memory
-      - 2g
+      - 3g
       - --cores
       - "2"
       - spark://spark-master:7077
@@ -48,6 +48,30 @@ services:
       PYSPARK_PYTHON: python3
     depends_on:
       - spark-master
+    volumes:
+      - ./data:/home/jupyter/data
+      - ./spark-conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+
+  spark-history:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cluster
+    container_name: spark-history
+    hostname: spark-history
+    networks:
+      - sandbox
+    # The History Server refuses to start if the event log dir is missing.
+    # The notebook (uid 1000) and this container (uid 185) both write there, so make it world-writable.
+    command:
+      - sh
+      - -c
+      - >-
+        mkdir -p /home/jupyter/data/spark-events &&
+        chmod 1777 /home/jupyter/data/spark-events &&
+        exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
+    ports:
+      - "18080:18080"   # Spark History Server (finished apps, from event logs)
     volumes:
       - ./data:/home/jupyter/data
       - ./spark-conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
@@ -81,6 +105,7 @@ services:
       - ./spark-conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
     depends_on:
       - spark-master
+      - spark-history
       - kafka
       - postgres
 
@@ -136,7 +161,7 @@ services:
     networks:
       - sandbox
     ports:
-      - "5432:5432"
+      - "5433:5432"   # host 5433; 5432 is often taken by a local Postgres
     environment:
       POSTGRES_USER: spark
       POSTGRES_PASSWORD: spark123
