@@ -11,8 +11,8 @@ A local environment for practising real-time and batch data pipelines with PySpa
 │  Docker network: sandbox                                        │
 │                                                                 │
 │  ┌──────────────┐   ┌──────────────┐                           │
-│  │ spark-master │◄──│ spark-worker │  bitnami/spark:3.5        │
-│  │  :8080 :7077 │   │  2G / 2 CPU  │                           │
+│  │ spark-master │◄──│ spark-worker │  apache/spark:4.0.3       │
+│  │ :18081 :7077 │   │  2G / 2 CPU  │                           │
 │  └──────┬───────┘   └──────────────┘                           │
 │         │ spark://spark-master:7077                             │
 │  ┌──────▼───────┐                                              │
@@ -22,7 +22,7 @@ A local environment for practising real-time and batch data pipelines with PySpa
 │         │                                                       │
 │  ┌──────▼──────┐  ┌────────────┐  ┌──────────────────────┐    │
 │  │    kafka    │  │ kafka-ui   │  │      postgres         │    │
-│  │  :9092      │  │  :8090     │  │  :5432               │    │
+│  │  :9092      │  │  :8090     │  │  :5433               │    │
 │  │  (KRaft)    │  │            │  │  db: sandbox          │    │
 │  └─────────────┘  └────────────┘  └──────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
@@ -38,18 +38,19 @@ A local environment for practising real-time and batch data pipelines with PySpa
 | Service | URL / Host | Credentials |
 |---|---|---|
 | JupyterLab | http://localhost:8888 | token: `spark123` |
-| Spark Master UI | http://localhost:8080 | — |
+| Spark Master UI | http://localhost:18081 | — |
 | Spark App UI | http://localhost:4040 | active while a job runs |
+| Spark History Server | http://localhost:18080 | finished and running apps (from event logs) |
 | Kafka UI | http://localhost:8090 | — |
 | Kafka (broker) | `localhost:9092` | — |
-| PostgreSQL | `localhost:5432` | user: `spark` / pw: `spark123` / db: `sandbox` |
+| PostgreSQL | `localhost:5433` | user: `spark` / pw: `spark123` / db: `sandbox` |
 
 ---
 
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) ≥ 4.x (or Docker Engine + Compose plugin)
-- At least **6 GB RAM** allocated to Docker
+- At least **8 GB RAM** allocated to Docker (the Spark worker runs 3 GB; the notebook driver runs 2 GB)
 - VS Code with the [Jupyter extension](https://marketplace.visualstudio.com/items?itemName=ms-toolsai.jupyter) (optional, for notebook editing)
 
 ---
@@ -240,6 +241,18 @@ docker exec notebook spark-submit \
   /home/jupyter/notebooks/my_job.py
 ```
 
+### Spark UI troubleshooting (notebook 04)
+
+`notebooks/04_spark_ui_troubleshooting.ipynb` reproduces three production problems on purpose and tells you what to look for in the UI:
+
+| Scenario | What to open | What you should see |
+|---|---|---|
+| Memory pressure | Stages → sort stage | *Spill (memory)* / *Spill (disk)* on the 4-partition run, none on the 200-partition run |
+| Data skew | Stages → join stage, Summary Metrics | One task much slower than the median; AQE splits it when skew handling is on |
+| Slow joins | SQL / DataFrame tab | `SortMergeJoin` + `Exchange` vs `BroadcastHashJoin` |
+
+The lab writes its tables to the `iceberg` catalog (`data/iceberg`). Finished runs stay in the History Server at http://localhost:18080 (event logs in `data/spark-events`), so you can compare them after the notebook session ends.
+
 ### Rebuild the notebook image after changing requirements.txt or Dockerfile
 
 ```bash
@@ -253,14 +266,15 @@ docker compose up --build notebook
 ```
 .
 ├── docker-compose.yml          # All services
-├── Dockerfile                  # notebook image: bitnami/spark + Jupyter + extras
+├── Dockerfile                  # notebook image: apache/spark:4.0.3 + Jupyter + extras
 ├── requirements.txt            # Python packages installed in notebook image
 ├── spark-conf/
 │   └── spark-defaults.conf     # AQE, Delta Lake, driver/executor memory
 ├── init-scripts/
 │   └── 01_init.sql             # PostgreSQL schema + seed rows (runs on first start)
 ├── notebooks/
-│   └── 00_getting_started.ipynb  # End-to-end walkthrough
+│   ├── 00_getting_started.ipynb  # End-to-end walkthrough
+│   └── 04_spark_ui_troubleshooting.ipynb  # Memory pressure, skew and slow joins in the Spark UI
 └── data/
     ├── input/                  # Drop CSV / JSON files here to read in notebooks
     └── output/                 # Spark / DuckDB write targets
@@ -271,7 +285,7 @@ docker compose up --build notebook
 ## Troubleshooting
 
 **Container fails with `Address already in use`**  
-Another process is using port 8888, 8080, 9092, or 5432.  
+Another process is using port 8888, 18081, 9092, or 5433.  
 Edit the host-side port in `docker-compose.yml` (left side of `"host:container"`).
 
 **Spark job hangs or OOMs**  
@@ -286,5 +300,5 @@ The JARs are downloaded during `docker build`. Run `docker compose up --build no
 **`CLUSTER_ID` mismatch error from Kafka**  
 The `kafka-data` volume has stale metadata. Run `docker compose down -v` to wipe it, then restart.
 
-**`bitnami/spark:3.5: not found`**  
-Bitnami dropped the `major.minor` tags. The compose file now uses `apache/spark:3.5.0` (official Apache image) — pull it with `docker pull apache/spark:3.5.0` if needed.
+**`apache/spark:4.0.3: not found` or pull errors**  
+The cluster and notebook images are built from the official `apache/spark:4.0.3-python3` base image. Pull it with `docker pull apache/spark:4.0.3-python3` if the build can't fetch it.

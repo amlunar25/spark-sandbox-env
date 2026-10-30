@@ -5,6 +5,7 @@ FROM apache/spark:4.0.3-python3 AS spark-base
 
 ARG SPARK_VERSION=4.0.3
 ARG SCALA_VERSION=2.13
+ARG ICEBERG_VERSION=1.10.0
 
 USER root
 
@@ -30,7 +31,10 @@ RUN JAR_DIR=/opt/spark/jars \
  && curl -fsSL "${BASE}/io/delta/delta-spark_${SCALA_VERSION}/4.0.0/delta-spark_${SCALA_VERSION}-4.0.0.jar" \
          -o "${JAR_DIR}/delta-spark_${SCALA_VERSION}-4.0.0.jar" \
  && curl -fsSL "${BASE}/io/delta/delta-storage/4.0.0/delta-storage-4.0.0.jar" \
-         -o "${JAR_DIR}/delta-storage-4.0.0.jar"
+         -o "${JAR_DIR}/delta-storage-4.0.0.jar" \
+ # Apache Iceberg 1.10 runtime (Spark 4.0 / Scala 2.13)
+ && curl -fsSL "${BASE}/org/apache/iceberg/iceberg-spark-runtime-4.0_${SCALA_VERSION}/${ICEBERG_VERSION}/iceberg-spark-runtime-4.0_${SCALA_VERSION}-${ICEBERG_VERSION}.jar" \
+         -o "${JAR_DIR}/iceberg-spark-runtime-4.0_${SCALA_VERSION}-${ICEBERG_VERSION}.jar"
 
 # Conf dir for the spark-defaults.conf bind-mount
 RUN mkdir -p /opt/spark/conf
